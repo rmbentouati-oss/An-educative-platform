@@ -61,7 +61,11 @@ function upload_file(array $file, string $kind): string {
     return 'uploads/' . ($kind === 'video' ? 'videos/' : 'receipts/') . $name;
 }
 function page_header(string $title): void { ?>
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title><?= e($title) ?> | <?= e(APP_NAME) ?></title><link rel="stylesheet" href="<?= e(BASE_URL) ?>/assets/css/style.css"></head><body>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title><?= e($title) ?> | <?= e(APP_NAME) ?></title>
+<link rel="stylesheet" href="<?= e(BASE_URL) ?>/assets/css/style.css?v=<?= time() ?>">
+</head>
+<body>
 <header class="topbar"><a class="brand" href="<?= e(BASE_URL) ?>/index.php">LearnHub</a><nav>
 <?php if (current_user()): ?><a href="<?= e(BASE_URL) ?>/<?= is_admin() ? 'admin/dashboard.php' : 'student/dashboard.php' ?>">Dashboard</a><a href="<?= e(BASE_URL) ?>/auth/logout.php">Log out</a><?php else: ?><a href="<?= e(BASE_URL) ?>/auth/login.php">Log in</a><a href="<?= e(BASE_URL) ?>/auth/register.php">Register</a><?php endif; ?>
 </nav></header><main class="container">

@@ -1,14 +1,1080 @@
 <?php
-require_once __DIR__ . '/../config/config.php'; require_once __DIR__ . '/../includes/functions.php'; require_admin();
-$error='';
-if($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['create_course'])){verify_csrf();$title=trim($_POST['title']??'');$desc=trim($_POST['description']??'');$level=$_POST['level']??'beginner';$free=isset($_POST['is_free'])?1:0;$price=$free?0:(float)($_POST['price']??0);$status=($_POST['status']??'draft')==='published'?'published':'draft';if($title===''||$desc===''||mb_strlen($title)>200||!in_array($level,['beginner','intermediate','advanced'],true)||(!$free&&$price<=0)){$error='Please check the course details and price.';}else{$st=$pdo->prepare('INSERT INTO courses(title,slug,description,level,price,is_free,status) VALUES(?,?,?,?,?,?,?)');$st->execute([$title,make_slug($title,$pdo),$desc,$level,$price,$free,$status]);flash('success','Course created. You can now add its video lessons.');redirect('admin/course.php?id='.$pdo->lastInsertId());}}
-if($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['delete_course'])){verify_csrf();$courseId=(int)($_POST['course_id']??0);try{$fileStmt=$pdo->prepare('SELECT video_path FROM lessons WHERE course_id=?');$fileStmt->execute([$courseId]);$videoPaths=$fileStmt->fetchAll(PDO::FETCH_COLUMN);$pdo->beginTransaction();$del=$pdo->prepare('DELETE FROM courses WHERE id=?');$del->execute([$courseId]);if($del->rowCount()!==1)throw new RuntimeException('Course not found.');$pdo->commit();foreach($videoPaths as $videoPath){$fullPath=dirname(__DIR__).'/'.$videoPath;if(is_file($fullPath))@unlink($fullPath);}flash('success','Course and its lessons were deleted.');redirect('admin/dashboard.php');}catch(Throwable $e){if($pdo->inTransaction())$pdo->rollBack();error_log($e->getMessage());flash('error','Could not delete the course.');redirect('admin/dashboard.php');}}
-if($_SERVER['REQUEST_METHOD']==='POST' && isset($_POST['review_payment'])){verify_csrf();$eid=(int)($_POST['enrollment_id']??0);$decision=$_POST['decision']??'';if(in_array($decision,['approved','rejected'],true)){$st=$pdo->prepare('UPDATE enrollments SET status=?,reviewed_at=NOW() WHERE id=?');$st->execute([$decision,$eid]);flash('success','Payment submission updated.');redirect('admin/dashboard.php#payments');}}
-$courses=$pdo->query("SELECT c.*, (SELECT COUNT(*) FROM lessons l WHERE l.course_id=c.id) lesson_count FROM courses c ORDER BY c.created_at DESC")->fetchAll();
-$payments=$pdo->query("SELECT e.id enrollment_id,e.status,e.submitted_at,e.receipt_path,u.full_name,u.email,c.title,c.price FROM enrollments e JOIN users u ON u.id=e.user_id JOIN courses c ON c.id=e.course_id WHERE c.is_free=0 ORDER BY e.submitted_at DESC")->fetchAll();
-$students=(int)$pdo->query("SELECT COUNT(*) FROM users WHERE role='student'")->fetchColumn();
-page_header('Administrator dashboard');?><h1>Administrator Dashboard</h1><p class="muted">Manage courses, upload lesson videos, and review student payment receipts from one dashboard.</p><?php if($error):?><div class="alert error"><?=e($error)?></div><?php endif;?><div class="grid"><div class="card"><h3><?=count($courses)?></h3><p>Courses</p></div><div class="card"><h3><?=$students?></h3><p>Students</p></div><div class="card"><h3><?=count(array_filter($payments,fn($p)=>$p['status']==='pending'))?></h3><p>Pending payments</p></div></div>
-<section class="panel"><h2>Create a course</h2><form class="form" method="post"><input type="hidden" name="csrf_token" value="<?=e(csrf_token())?>"><label>Course title</label><input name="title" maxlength="200" required><label>Description</label><textarea name="description" required></textarea><label>Level</label><select name="level"><option value="beginner">Beginner</option><option value="intermediate">Intermediate</option><option value="advanced">Advanced</option></select><label><input type="checkbox" name="is_free" id="freeCourse" checked style="width:auto"> Free course</label><label>Price (DZD)</label><input type="number" name="price" id="coursePrice" min="0" step="0.01" value="0" disabled><label>Publication</label><select name="status"><option value="draft">Save as draft</option><option value="published">Publish now</option></select><button name="create_course">Create course</button></form></section>
-<section class="panel"><h2>All courses</h2><div class="table-wrap"><table><thead><tr><th>Course</th><th>Lessons</th><th>Price</th><th>Status</th><th>Actions</th></tr></thead><tbody><?php foreach($courses as $c):?><tr><td><?=e($c['title'])?></td><td><?=(int)$c['lesson_count']?></td><td><?= (int)$c['is_free']?'Free':number_format((float)$c['price'],2).' DZD' ?></td><td><span class="badge <?=e($c['status'])?>"><?=e(ucfirst($c['status']))?></span></td><td><a class="btn" href="<?=e(BASE_URL)?>/admin/course.php?id=<?=(int)$c['id']?>">Manage videos</a> <a class="btn secondary" href="<?=e(BASE_URL)?>/admin/edit-course.php?id=<?=(int)$c['id']?>">Edit</a> <form class="inline" method="post" onsubmit="return confirm('Delete this course, all its lessons, and student enrollments? This cannot be undone.')"><input type="hidden" name="csrf_token" value="<?=e(csrf_token())?>"><input type="hidden" name="course_id" value="<?=(int)$c['id']?>"><button class="btn danger" type="submit" name="delete_course" value="1">Remove</button></form></td></tr><?php endforeach;?></tbody></table></div></section>
-<section class="panel" id="payments"><h2>Student payment receipts</h2><div class="table-wrap"><table><thead><tr><th>Student</th><th>Course</th><th>Amount</th><th>Receipt</th><th>Status</th><th>Review</th></tr></thead><tbody><?php foreach($payments as $p):?><tr><td><?=e($p['full_name'])?><br><small><?=e($p['email'])?></small></td><td><?=e($p['title'])?></td><td><?=number_format((float)$p['price'],2)?> DZD</td><td><a target="_blank" rel="noopener" href="<?=e(BASE_URL)?>/admin/receipt.php?id=<?=(int)$p['enrollment_id']?>">View receipt</a></td><td><span class="badge <?=e($p['status'])?>"><?=e(ucfirst($p['status']))?></span></td><td><?php if($p['status']==='pending'):?><form method="post" class="inline"><input type="hidden" name="csrf_token" value="<?=e(csrf_token())?>"><input type="hidden" name="enrollment_id" value="<?=(int)$p['enrollment_id']?>"><button name="review_payment" value="1" formaction="" onclick="this.form.decision.value='approved'">Approve</button><input type="hidden" name="decision" value="approved"><button class="btn danger" name="review_payment" value="1" onclick="this.form.decision.value='rejected'">Reject</button></form><?php else:?>Reviewed<?php endif;?></td></tr><?php endforeach;?><?php if(!$payments):?><tr><td colspan="6">No payment submissions yet.</td></tr><?php endif;?></tbody></table></div></section>
-<script>const f=document.getElementById('freeCourse'),p=document.getElementById('coursePrice');f.addEventListener('change',()=>{p.disabled=f.checked;p.value=f.checked?'0':'';});</script><?php page_footer();?>
+require_once __DIR__ . '/../config/config.php';
+require_once __DIR__ . '/../includes/functions.php';
+
+// Admin protection
+if (!current_user() || !is_admin()) {
+    redirect('auth/login.php');
+}
+
+$admin = current_user();
+
+// Dashboard statistics
+$stats = [
+    'students' => 0,
+    'courses' => 0,
+    'lessons' => 0,
+    'pending' => 0,
+    'enrollments' => 0,
+];
+
+$recentCourses = [];
+$recentEnrollments = [];
+$dbError = false;
+
+try {
+
+    // Total students
+    $stats['students'] = (int) $pdo->query(
+        "SELECT COUNT(*) FROM users WHERE role = 'student'"
+    )->fetchColumn();
+
+    // Total courses
+    $stats['courses'] = (int) $pdo->query(
+        "SELECT COUNT(*) FROM courses"
+    )->fetchColumn();
+
+    // Total lessons
+    $stats['lessons'] = (int) $pdo->query(
+        "SELECT COUNT(*) FROM lessons"
+    )->fetchColumn();
+
+    // Pending enrollments
+    $stats['pending'] = (int) $pdo->query(
+        "SELECT COUNT(*) FROM enrollments WHERE status = 'pending'"
+    )->fetchColumn();
+
+    // Total enrollments
+    $stats['enrollments'] = (int) $pdo->query(
+        "SELECT COUNT(*) FROM enrollments"
+    )->fetchColumn();
+
+    // Recent courses
+    $stmt = $pdo->query("
+        SELECT id, title, status
+        FROM courses
+        ORDER BY id DESC
+        LIMIT 5
+    ");
+
+    $recentCourses = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    // Recent enrollments
+    $stmt = $pdo->query("
+        SELECT
+            e.id,
+            e.status,
+            e.submitted_at,
+            u.full_name,
+            c.title AS course_title
+        FROM enrollments e
+        LEFT JOIN users u ON u.id = e.user_id
+        LEFT JOIN courses c ON c.id = e.course_id
+        ORDER BY e.id DESC
+        LIMIT 5
+    ");
+
+    $recentEnrollments = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+} catch (PDOException $e) {
+
+    error_log('Admin Dashboard Error: ' . $e->getMessage());
+    $dbError = true;
+}
+
+page_header('Admin Dashboard');
+?>
+
+<style>
+
+/* =====================================
+   LEARNHUB ADMIN DASHBOARD
+===================================== */
+
+.admin-dashboard {
+    max-width: 1450px;
+    margin: 35px auto 60px;
+    padding: 0 30px;
+    color: #29243E;
+    font-family: 'Manrope', sans-serif;
+}
+
+.admin-dashboard * {
+    box-sizing: border-box;
+}
+
+/* HEADER */
+
+.admin-welcome {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 20px;
+    margin-bottom: 30px;
+}
+
+.admin-eyebrow {
+    color: #8064D7;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 2px;
+}
+
+.admin-welcome h1 {
+    margin: 9px 0;
+    font-size: 30px;
+    font-weight: 800;
+    letter-spacing: -1px;
+}
+
+.admin-welcome p {
+    margin: 0;
+    color: #9290A0;
+    font-size: 13px;
+}
+
+.admin-profile {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 16px;
+    background: white;
+    border: 1px solid #EEEAF6;
+    border-radius: 15px;
+}
+
+.admin-avatar {
+    width: 43px;
+    height: 43px;
+    display: grid;
+    place-items: center;
+    border-radius: 13px;
+    background: linear-gradient(135deg,#7657D5,#B49BEF);
+    color: white;
+    font-size: 17px;
+    font-weight: 800;
+}
+
+.admin-profile-info strong,
+.admin-profile-info small {
+    display: block;
+}
+
+.admin-profile-info strong {
+    font-size: 12px;
+}
+
+.admin-profile-info small {
+    margin-top: 4px;
+    color: #9993A8;
+    font-size: 10px;
+}
+
+/* BANNER */
+
+.admin-banner {
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 190px;
+    padding: 35px 42px;
+    margin-bottom: 35px;
+    border-radius: 23px;
+    background: linear-gradient(110deg,#6549BD,#9278E5);
+    color: white;
+    box-shadow: 0 15px 35px rgba(104,75,190,.15);
+}
+
+.admin-banner-content {
+    position: relative;
+    z-index: 2;
+    max-width: 570px;
+}
+
+.admin-banner-label {
+    color: #E1D8FF;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 2px;
+}
+
+.admin-banner h2 {
+    margin: 13px 0 8px;
+    color: white;
+    font-size: 28px;
+    font-weight: 800;
+}
+
+.admin-banner p {
+    margin: 0;
+    color: #E9E2FF;
+    font-size: 12px;
+    line-height: 1.9;
+}
+
+.admin-banner-art {
+    position: absolute;
+    right: 75px;
+    top: 50%;
+    transform: translateY(-50%) rotate(8deg);
+    width: 125px;
+    height: 125px;
+    display: grid;
+    place-items: center;
+    border: 1px solid rgba(255,255,255,.25);
+    border-radius: 35px;
+    background: rgba(255,255,255,.12);
+    font-size: 60px;
+}
+
+.admin-banner::before {
+    content: "";
+    position: absolute;
+    width: 270px;
+    height: 270px;
+    right: -75px;
+    top: -140px;
+    border: 1px solid rgba(255,255,255,.15);
+    border-radius: 50%;
+}
+
+.admin-banner::after {
+    content: "";
+    position: absolute;
+    width: 190px;
+    height: 190px;
+    right: 110px;
+    bottom: -135px;
+    border: 1px solid rgba(255,255,255,.15);
+    border-radius: 50%;
+}
+
+/* SECTION HEADINGS */
+
+.admin-section-title {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin: 35px 0 18px;
+}
+
+.admin-section-title h2 {
+    margin: 0;
+    font-size: 19px;
+    font-weight: 800;
+}
+
+.admin-section-title span {
+    color: #9993A8;
+    font-size: 11px;
+}
+
+/* STATISTICS */
+
+.admin-stats {
+    display: grid;
+    grid-template-columns: repeat(4,1fr);
+    gap: 18px;
+}
+
+.admin-stat {
+    padding: 23px;
+    background: white;
+    border: 1px solid #EEEAF6;
+    border-radius: 18px;
+    transition: .25s ease;
+}
+
+.admin-stat:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 12px 28px rgba(49,36,87,.07);
+    border-color: #DCCFFF;
+}
+
+.admin-stat-top {
+    display: flex;
+    justify-content: space-between;
+}
+
+.admin-stat-icon {
+    width: 44px;
+    height: 44px;
+    display: grid;
+    place-items: center;
+    border-radius: 13px;
+    font-size: 20px;
+}
+
+.stat-purple .admin-stat-icon {
+    background: #F0EBFF;
+    color: #7657D5;
+}
+
+.stat-blue .admin-stat-icon {
+    background: #EAF1FF;
+    color: #6487D5;
+}
+
+.stat-pink .admin-stat-icon {
+    background: #FCEDEE;
+    color: #D77E94;
+}
+
+.stat-orange .admin-stat-icon {
+    background: #FFF3E5;
+    color: #D49A50;
+}
+
+.admin-stat-number {
+    margin: 19px 0 5px;
+    font-size: 30px;
+    font-weight: 800;
+    letter-spacing: -1px;
+}
+
+.admin-stat-label {
+    color: #898499;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.admin-stat-link {
+    display: inline-block;
+    margin-top: 15px;
+    color: #7657D5;
+    font-size: 10px;
+    font-weight: 700;
+    text-decoration: none;
+}
+
+/* QUICK ACTIONS */
+
+.admin-quick-grid {
+    display: grid;
+    grid-template-columns: repeat(4,1fr);
+    gap: 15px;
+}
+
+.admin-quick-card {
+    display: flex;
+    align-items: center;
+    gap: 13px;
+    padding: 18px;
+    background: white;
+    border: 1px solid #EEEAF6;
+    border-radius: 16px;
+    color: #29243E;
+    text-decoration: none;
+    transition: .25s;
+}
+
+.admin-quick-card:hover {
+    transform: translateY(-4px);
+    border-color: #CFC0FF;
+    box-shadow: 0 10px 25px rgba(49,36,87,.06);
+}
+
+.quick-icon {
+    width: 43px;
+    height: 43px;
+    display: grid;
+    flex-shrink: 0;
+    place-items: center;
+    border-radius: 12px;
+    background: #F0EBFF;
+    color: #7657D5;
+    font-size: 20px;
+}
+
+.admin-quick-card strong,
+.admin-quick-card small {
+    display: block;
+}
+
+.admin-quick-card strong {
+    font-size: 12px;
+}
+
+.admin-quick-card small {
+    margin-top: 5px;
+    color: #9993A8;
+    font-size: 10px;
+}
+
+/* CONTENT GRID */
+
+.admin-content-grid {
+    display: grid;
+    grid-template-columns: 1.1fr .9fr;
+    gap: 20px;
+    margin-top: 25px;
+}
+
+.admin-box {
+    min-width: 0;
+    padding: 23px;
+    background: white;
+    border: 1px solid #EEEAF6;
+    border-radius: 18px;
+}
+
+.admin-box-heading {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 20px;
+}
+
+.admin-box-heading h3 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 800;
+}
+
+.admin-box-heading a {
+    color: #7657D5;
+    font-size: 10px;
+    font-weight: 700;
+    text-decoration: none;
+}
+
+/* TABLE */
+
+.admin-table-wrap {
+    width: 100%;
+    overflow-x: auto;
+}
+
+.admin-table {
+    width: 100%;
+    min-width: 300px;
+    border-collapse: collapse;
+}
+
+.admin-table th {
+    padding: 12px 10px;
+    background: #F8F6FC;
+    color: #9993A8;
+    font-size: 9px;
+    font-weight: 800;
+    text-align: left;
+}
+
+.admin-table td {
+    padding: 15px 10px;
+    color: #5F5A70;
+    font-size: 11px;
+    border-bottom: 1px solid #F1EEF6;
+}
+
+.admin-table tr:last-child td {
+    border-bottom: none;
+}
+
+.admin-table td strong {
+    color: #302A45;
+    font-size: 11px;
+}
+
+/* STATUS */
+
+.admin-status {
+    display: inline-block;
+    padding: 5px 10px;
+    border-radius: 20px;
+    background: #F0EBFF;
+    color: #7657D5;
+    font-size: 9px;
+    font-weight: 800;
+    text-transform: capitalize;
+}
+
+.admin-status.pending {
+    background: #FFF3DD;
+    color: #B47B28;
+}
+
+.admin-status.approved,
+.admin-status.published {
+    background: #E5F5EC;
+    color: #3B9664;
+}
+
+.admin-status.rejected {
+    background: #FCE9E9;
+    color: #C35D65;
+}
+
+/* ENROLLMENTS */
+
+.admin-enrollment {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 0;
+    border-bottom: 1px solid #F1EEF6;
+}
+
+.admin-enrollment:last-child {
+    border-bottom: none;
+}
+
+.enrollment-avatar {
+    width: 40px;
+    height: 40px;
+    display: grid;
+    flex-shrink: 0;
+    place-items: center;
+    background: #F0EBFF;
+    color: #7657D5;
+    border-radius: 12px;
+    font-size: 14px;
+    font-weight: 800;
+}
+
+.enrollment-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.enrollment-info strong,
+.enrollment-info small {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.enrollment-info strong {
+    color: #302A45;
+    font-size: 11px;
+}
+
+.enrollment-info small {
+    margin-top: 4px;
+    color: #9993A8;
+    font-size: 10px;
+}
+
+/* EMPTY & ERROR */
+
+.admin-empty {
+    padding: 30px 10px;
+    text-align: center;
+    color: #9993A8;
+    font-size: 12px;
+}
+
+.admin-error {
+    margin-bottom: 20px;
+    padding: 13px 16px;
+    border-radius: 12px;
+    background: #FFF0F0;
+    color: #BC5555;
+    font-size: 12px;
+}
+
+/* FOOTER */
+
+.admin-dashboard-footer {
+    display: flex;
+    justify-content: space-between;
+    gap: 15px;
+    margin-top: 35px;
+    padding-top: 20px;
+    border-top: 1px solid #EEEAF6;
+    color: #A29DAF;
+    font-size: 10px;
+}
+
+/* RESPONSIVE */
+
+@media(max-width:1050px) {
+    .admin-stats {
+        grid-template-columns: repeat(2,1fr);
+    }
+
+    .admin-quick-grid {
+        grid-template-columns: repeat(2,1fr);
+    }
+}
+
+@media(max-width:750px) {
+    .admin-dashboard {
+        padding: 0 17px;
+    }
+
+    .admin-content-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .admin-banner {
+        padding: 28px;
+    }
+
+    .admin-banner-art {
+        right: 25px;
+        opacity: .4;
+    }
+}
+
+@media(max-width:480px) {
+    .admin-welcome {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .admin-welcome h1 {
+        font-size: 24px;
+    }
+
+    .admin-stats {
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+    }
+
+    .admin-stat {
+        padding: 15px;
+    }
+
+    .admin-stat-number {
+        font-size: 24px;
+    }
+
+    .admin-quick-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .admin-banner-art {
+        display: none;
+    }
+
+    .admin-banner h2 {
+        font-size: 22px;
+    }
+
+    .admin-dashboard-footer {
+        flex-direction: column;
+    }
+}
+
+</style>
+
+
+<div class="admin-dashboard">
+
+    <!-- HEADER -->
+
+    <div class="admin-welcome">
+
+        <div>
+            <span class="admin-eyebrow">
+                ADMINISTRATION / OVERVIEW
+            </span>
+
+            <h1>
+                Welcome back,
+                <?= e($admin['full_name'] ?? 'Administrator') ?>!
+            </h1>
+
+            <p>
+                Here is what's happening with your learning platform today.
+            </p>
+        </div>
+
+        <div class="admin-profile">
+
+            <div class="admin-avatar">
+                <?= e(strtoupper(substr($admin['full_name'] ?? 'A', 0, 1))) ?>
+            </div>
+
+            <div class="admin-profile-info">
+                <strong>
+                    <?= e($admin['full_name'] ?? 'Administrator') ?>
+                </strong>
+
+                <small>Platform Administrator</small>
+            </div>
+
+        </div>
+
+    </div>
+
+
+    <?php if ($dbError): ?>
+        <div class="admin-error">
+            Some dashboard information could not be loaded.
+            Please check the database structure.
+        </div>
+    <?php endif; ?>
+
+
+    <!-- HERO BANNER -->
+
+    <section class="admin-banner">
+
+        <div class="admin-banner-content">
+
+            <span class="admin-banner-label">
+                LEARNHUB CONTROL CENTER
+            </span>
+
+            <h2>Manage. Monitor. Inspire.</h2>
+
+            <p>
+                Your platform is growing. Manage courses, monitor students,
+                and keep everything running smoothly from one place.
+            </p>
+
+        </div>
+
+        <div class="admin-banner-art">✦</div>
+
+    </section>
+
+
+    <!-- STATISTICS -->
+
+    <div class="admin-section-title">
+        <h2>Platform Overview</h2>
+        <span>Live database statistics</span>
+    </div>
+
+
+    <div class="admin-stats">
+
+        <!-- STUDENTS -->
+
+        <div class="admin-stat stat-purple">
+
+            <div class="admin-stat-top">
+                <div class="admin-stat-icon">♙</div>
+            </div>
+
+            <div class="admin-stat-number">
+                <?= number_format($stats['students']) ?>
+            </div>
+
+            <div class="admin-stat-label">
+                Total Students
+            </div>
+
+            <a href="students.php" class="admin-stat-link">
+                Manage students →
+            </a>
+
+        </div>
+
+
+        <!-- COURSES -->
+
+        <div class="admin-stat stat-blue">
+
+            <div class="admin-stat-top">
+                <div class="admin-stat-icon">▤</div>
+            </div>
+
+            <div class="admin-stat-number">
+                <?= number_format($stats['courses']) ?>
+            </div>
+
+            <div class="admin-stat-label">
+                Total Courses
+            </div>
+
+            <a href="courses.php" class="admin-stat-link">
+                Manage courses →
+            </a>
+
+        </div>
+
+
+        <!-- LESSONS -->
+
+        <div class="admin-stat stat-pink">
+
+            <div class="admin-stat-top">
+                <div class="admin-stat-icon">▣</div>
+            </div>
+
+            <div class="admin-stat-number">
+                <?= number_format($stats['lessons']) ?>
+            </div>
+
+            <div class="admin-stat-label">
+                Total Lessons
+            </div>
+
+            <a href="courses.php" class="admin-stat-link">
+                View courses →
+            </a>
+
+        </div>
+
+
+        <!-- PENDING -->
+
+        <div class="admin-stat stat-orange">
+
+            <div class="admin-stat-top">
+                <div class="admin-stat-icon">◷</div>
+            </div>
+
+            <div class="admin-stat-number">
+                <?= number_format($stats['pending']) ?>
+            </div>
+
+            <div class="admin-stat-label">
+                Pending Enrollments
+            </div>
+
+            <a href="enrollments.php" class="admin-stat-link">
+                Review requests →
+            </a>
+
+        </div>
+
+    </div>
+
+
+    <!-- MORE INSIGHTS -->
+
+    <div class="admin-section-title">
+        <h2>More Insights</h2>
+        <span>Additional statistics</span>
+    </div>
+
+
+    <div class="admin-stats">
+
+        <div class="admin-stat stat-blue">
+
+            <div class="admin-stat-icon">◎</div>
+
+            <div class="admin-stat-number">
+                <?= number_format($stats['enrollments']) ?>
+            </div>
+
+            <div class="admin-stat-label">
+                Total Enrollments
+            </div>
+
+            <a href="enrollments.php" class="admin-stat-link">
+                View enrollments →
+            </a>
+
+        </div>
+
+    </div>
+
+
+    <!-- QUICK ACTIONS -->
+
+    <div class="admin-section-title">
+        <h2>Quick Actions</h2>
+        <span>Manage your platform</span>
+    </div>
+
+
+    <div class="admin-quick-grid">
+
+        <a href="courses.php" class="admin-quick-card">
+
+            <div class="quick-icon">＋</div>
+
+            <div>
+                <strong>Manage Courses</strong>
+                <small>Create and review courses</small>
+            </div>
+
+        </a>
+
+
+        <a href="lessons.php" class="admin-quick-card">
+
+            <div class="quick-icon">▤</div>
+
+            <div>
+                <strong>Manage Lessons</strong>
+                <small>Organize learning content</small>
+            </div>
+
+        </a>
+
+
+        <a href="enrollments.php" class="admin-quick-card">
+
+            <div class="quick-icon">♧</div>
+
+            <div>
+                <strong>Enrollments</strong>
+                <small>Review student requests</small>
+            </div>
+
+        </a>
+
+
+        <a href="students.php" class="admin-quick-card">
+
+            <div class="quick-icon">♙</div>
+
+            <div>
+                <strong>Students</strong>
+                <small>View registered students</small>
+            </div>
+
+        </a>
+
+    </div>
+
+
+    <!-- RECENT ACTIVITY -->
+
+    <div class="admin-content-grid">
+
+        <!-- RECENT COURSES -->
+
+        <section class="admin-box">
+
+            <div class="admin-box-heading">
+
+                <h3>Recently Added Courses</h3>
+
+                <a href="courses.php">
+                    View all →
+                </a>
+
+            </div>
+
+
+            <?php if (empty($recentCourses)): ?>
+
+                <div class="admin-empty">
+                    No courses have been added yet.
+                </div>
+
+            <?php else: ?>
+
+                <div class="admin-table-wrap">
+
+                    <table class="admin-table">
+
+                        <thead>
+                            <tr>
+                                <th>COURSE</th>
+                                <th>STATUS</th>
+                            </tr>
+                        </thead>
+
+                        <tbody>
+
+                            <?php foreach ($recentCourses as $course): ?>
+
+                                <tr>
+
+                                    <td>
+                                        <strong>
+                                            <?= e($course['title']) ?>
+                                        </strong>
+                                    </td>
+
+                                    <td>
+                                        <span class="admin-status <?= e($course['status']) ?>">
+                                            <?= e(ucfirst($course['status'])) ?>
+                                        </span>
+                                    </td>
+
+                                </tr>
+
+                            <?php endforeach; ?>
+
+                        </tbody>
+
+                    </table>
+
+                </div>
+
+            <?php endif; ?>
+
+        </section>
+
+
+        <!-- RECENT ENROLLMENTS -->
+
+        <section class="admin-box">
+
+            <div class="admin-box-heading">
+
+                <h3>Recent Enrollments</h3>
+
+                <a href="enrollments.php">
+                    View all →
+                </a>
+
+            </div>
+
+
+            <?php if (empty($recentEnrollments)): ?>
+
+                <div class="admin-empty">
+                    No enrollment requests yet.
+                </div>
+
+            <?php else: ?>
+
+                <?php foreach ($recentEnrollments as $enrollment): ?>
+
+                    <div class="admin-enrollment">
+
+                        <div class="enrollment-avatar">
+                            <?= e(strtoupper(substr($enrollment['full_name'] ?? 'S', 0, 1))) ?>
+                        </div>
+
+                        <div class="enrollment-info">
+
+                            <strong>
+                                <?= e($enrollment['full_name'] ?? 'Unknown student') ?>
+                            </strong>
+
+                            <small>
+                                <?= e($enrollment['course_title'] ?? 'Unknown course') ?>
+                            </small>
+
+                        </div>
+
+                        <span class="admin-status <?= e($enrollment['status']) ?>">
+                            <?= e(ucfirst($enrollment['status'])) ?>
+                        </span>
+
+                    </div>
+
+                <?php endforeach; ?>
+
+            <?php endif; ?>
+
+        </section>
+
+    </div>
+
+
+    <!-- FOOTER -->
+
+    <div class="admin-dashboard-footer">
+
+        <span>
+            © <?= date('Y') ?> LearnHub — Administration Panel
+        </span>
+
+        <span>
+            Made for better learning experiences ✦
+        </span>
+
+    </div>
+
+</div>
+
+
+<?php page_footer(); ?>
