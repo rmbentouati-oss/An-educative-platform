@@ -6,16 +6,15 @@ if (session_status() !== PHP_SESSION_ACTIVE) {
 }
 
 define('APP_NAME', 'LearnHub');
-define('BASE_URL', '/edu-platform'); // Change if you rename the project folder.
+define('BASE_URL', '/edu-platform');
 define('UPLOAD_ROOT', dirname(__DIR__) . '/uploads');
-define('MAX_RECEIPT_SIZE', 8 * 1024 * 1024);       // 8 MB
-// Video upload size is also limited by PHP settings: upload_max_filesize and post_max_size.
-define('MAX_VIDEO_SIZE', 500 * 1024 * 1024);      // 500 MB
+define('MAX_RECEIPT_SIZE', 8 * 1024 * 1024);
+define('MAX_VIDEO_SIZE', 500 * 1024 * 1024);
 
 $dbHost = 'localhost';
 $dbName = 'learnhub_platform';
 $dbUser = 'root';
-$dbPass = ''; // Default XAMPP MySQL password. Update if yours is different.
+$dbPass = '';
 
 try {
     $pdo = new PDO(
@@ -28,8 +27,12 @@ try {
             PDO::ATTR_EMULATE_PREPARES => false,
         ]
     );
+
 } catch (PDOException $e) {
+
     error_log($e->getMessage());
+
     http_response_code(500);
+
     exit('Database connection failed. Import database.sql and check config/config.php.');
 }
